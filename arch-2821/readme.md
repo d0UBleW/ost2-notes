@@ -49,7 +49,9 @@
   - Meltdown and Spectre side-channel attack
 - `KPTI` (Kernel Page Table Isolation)
   - make kernel page tables inaccessible
-  - self note: experience in Linux, could be bypassed with `KPTI` trampoline to safely return from kernel space to userspace, otherwise it causes segfault
+  - self note:
+    - experience in Linux, could be bypassed with `KPTI` trampoline to safely return from kernel space to userspace, otherwise it causes segfault
+    - another trick is to use signal handler since the segfault happens after returning to userspace <https://trungnguyen1909.github.io/blog/post/matesctf/KSMASH/>
 
 ## Sessions
 
