@@ -266,3 +266,93 @@ KeWaitForMultipleObjects (
 
 - adjust IRQL to prevent interrupts
 - cannot be shared across processes unlike mutex
+
+## Processes and Threads
+
+### Executive Process (`_EPROCESS`)
+
+- Each process has an `_EPROCESS` block in kernel memory
+- Fields:
+  - `Pcb`: process control block
+  - `ActiveProcessLinks`: doubly linked list of `_EPROCESS` structures, use to traverse the list and look for PID 4
+  - `UniqueProcessId`
+    - PID 4 belongs to system process that has the kernel main threads (static across all Windows versions)
+  - `Token`: describe the process privileges
+
+### Process Environment Block (`_PEB`)
+
+- Each process has one in user process memory
+- content:
+  - loaded module list
+  - thread local storage (TLS) data
+  - heap information
+
+### Process Kernel Global Variables
+
+```windbg
+dt nt!_list_entry poi(nt!PsActiveProcessHead)
+dl PsActiveProcessHead
+dq nt!PsIdleProcess L1
+dq nt!PsInitialSystemProcess L1
+```
+
+### Executive Thread (`_ETHREAD`)
+
+- Each thread has an `_ETHREAD` block in kernel memory
+- content:
+  - pointer to the process `_EPROCESS` via `_KTHREAD`
+  - start address
+  - impersonation information
+
+### Thread Environment Block (`_TEB`)    
+
+- Each thread has one in user process memory
+- content:
+  - stack bounds information
+  - pointer to `_PEB`
+
+### Accessing Processes and Threads
+
+- `GS:0`
+  - points to `_TEB` in user mode
+  - points to `_KPCR` (kernel processor control region) in kernel mode
+
+- `_KPCR` contains `_KPRCB` as an in-line structure (kernel processor control block) (`gs` offset >= `0x180`)
+- `_KPCR.Self`: self pointer (to `_KPCR` structure) at offset `0x18`
+- `_KPCRB` contains pointer to `_KTHREAD` at offset 0x8
+- Thus, `_KTHREAD` could be accessed at offset `0x180 + 0x8 = 0x180`
+- `_KTHREAD` has pointer to the current process `_KPROCESS`
+
+![_KTHREAD and _EPROCESS relation](./eprocess_linked_list.svg)
+
+## Kernel Memory Pools
+
+- pool = kernel heap
+- windows kernel pools has mix chunk sizes, unlike Linux's kernel heap (slab allocator) which has same chunk size for a given memory region, like `kmalloc-8`, `kmalloc-16`, `kmalloc-32`, etc.
+
+### Pool Internals
+
+- two main pools:
+  - pageable
+  - non-pageable, never paged out, so page fault never occurs (safe for any IRQL)
+- each chunk (both alloc'd or free) has in-line `POOL_HEADER` structure before the chunk data
+
+```windbg
+dt _POOL_HEADER <addr>
+!pool <addr> <flags>
+```
+
+### Pool Types
+
+- Non-paged
+- Paged
+- Look-aside lists
+  - fast allocation for small fixed size blocks (< 256 bytes)
+  - can be paged or non-paged
+  - self note: similar to bins in Linux (tcachebins, fast bin, small bin, etc.)
+- Kernel Low Fragmentation Heap (kLFH)
+  - available in latest Windows versions
+  - off by default on Windows 1809 (RS5)
+  - on by default on Windows 1903 (19H1)
+  - different object types are allocated on different pages
+  - effective for mitigating UAF
