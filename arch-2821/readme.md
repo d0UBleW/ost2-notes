@@ -137,7 +137,7 @@ Manage:
 - well documented
 - commonly used for windows kernel exploitation
 - contains many interesting pointers to functions or structures
-- does not have address randomization until recently (how recent?)
+- does not have address randomization until recently (how recent? Windows 10 1703)
 
 ### Win32k.sys
 
@@ -356,3 +356,128 @@ dt _POOL_HEADER <addr>
   - on by default on Windows 1903 (19H1)
   - different object types are allocated on different pages
   - effective for mitigating UAF
+
+## Kernel Bug Exploitaiton
+
+### End Goals
+
+- kernel mode code execution
+- sandbox escape
+- token-based privilege escalation
+
+### Common Primitive Goals
+
+- arbitrary read/write primitives
+
+### Common Exploitation Techniques
+
+- NULL dereferences
+  - used to be feasible since we could allocate memory address near `0x0`
+- UAF / Type Confusion
+  - use to get other primitives:
+    - overflow corruption
+    - type confusion
+    - arb read/write
+- integer overflow/underflow
+- race conditions
+  - leads to UAF, bad length checks, etc.
+- memory information disclosure (memory leak)
+  - use to bypass `KASLR`
+
+## Mitigations
+
+- NX/DEP
+  - implemented in `PTE` (page table entry)
+  - before Windows 8, non-paged pool is marked as executable
+- KASLR
+  - effective for remote kernel exploitation
+  - limited for local kernel exploitation
+- NULL page mitigation
+  - implemented from windows 8
+- SMEP
+  - unable to get `PC` (program counter) points to user space code while in kernel mode
+  - implemented from windows 8
+- Object `TypeIndex` field encoding
+  - objects tracked by object manager has `_OBJECT_HEADER` structure prefixed in front of the structure
+  - formula: `(2nd least significant byte of OBJECT_HEADER address ^ typeindex ^ nt!ObHeaderCookie`
+  - `OBJECT_HEADER` address is the object address - `0x30` (`0x30` is `OBJECT_HEADER` size)
+- Kernel safe-unlinking
+  - check if `Entry->Flink->Blink == Entry->Blink->Flink == Entry`
+  - only kernel pool allocator on Windows 7
+  - all kernel linked list on Windows 8
+- Kernel Virtual Address (KVA) Shadow
+  - the same as KPTI
+  - swap page tables when context switching
+  - originally to prevent Meltdown
+  - implemented from Windows 10
+- SMAP
+  - partially added to Windows 10 1903
+    - only enabled in paths handling `DISPATCH_LEVEL` and interrupts
+  - could be used to craft structures in userland and with memory corruption vuln make a pointer points to our userland structure
+  - self note: stack pivoting is still possible?
+- page table self mapping index randomization
+  - page table address used to be non-randomized and the index for self reference is static and `SMEP` could be disabled by modifying the page table
+
+## Security Concepts
+
+### Access Checks
+
+- happen every time a thread opens an object (e.g., `CreateProcess` and `CreateFile`)
+- done by the security reference monitor
+- check based on the thread's token and the objects security descriptor
+
+### Tokens
+
+- `!token`
+- privileges, accounts, groups, session, impersonation level, integrity level
+- token structures are stored in kernel space
+
+### Security Descriptors
+
+- `!sd` show security descriptor (`_OBJECT_HEADER->SecurityDescriptor >> 4 << 4`)
+- contains owner SID, group SID
+
+### Access Control List/Entries
+
+- ACL contains ACE structures
+- ACE structure contains SID to allow or deny access to an object
+
+### Account Rights
+
+- associated with an account
+- can be allow or deny
+
+### Privileges
+
+- stored in token
+- can be enabled/disabled
+- useful:
+  - `SeDebugPrivilege`
+  - `SeCreateTokenPrivilege`: admin equivalent
+  - `SeImpersonatePrivilege`
+
+## Kernel Payloads
+
+- Generally, it is not feasible to create a new high privileges processes with kernel privileges
+- But we could do less privileged action by migrating into userland and execute the userland payload with system privileges (require kernel code execution)
+- local privilege escalation only requires arb read/write on kernel memory
+
+### Token Stealing
+
+- find the `System` process (PID 4) by traversing the `_EPROCESS` lists
+- grab the token address
+- traverse the list again to find our target process for privilege escalation
+- modifying the pointer to point to system token
+
+### SID Replacement
+
+- patch owner SID to `Local System`
+- patch group SID to `Administrators`
+
+### Privilege Patching
+
+- only require to change the privilege bits
+
+## Note
+
+- any application can retrieve the base address of any kernel module with `NtQuerySystemInformation()` API together with `SystemModuleInformation` information class (<https://j00ru.vexillium.org/2011/06/smep-what-is-it-and-how-to-beat-it-on-windows/>)
